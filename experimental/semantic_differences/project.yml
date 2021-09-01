@@ -1,0 +1,30 @@
+title: "Semantic differences (DiscriminAtt) task from SemEval 2018"
+description: "A benchmark task on recognizing discriminative attributes, attributes that distinguish one word from another."
+spacy_version: ">=3.1.0,<4.0.0"
+
+vars:
+  config: "train"  # or "dev" or occasionally "test"
+
+directories: ["assets", "intermediate", "metrics"]
+
+assets:
+  -
+    dest: "assets/DiscriminAtt"
+    git:
+        repo: "https://github.com/dpaperno/DiscriminAtt/"
+        branch: "master"
+        path: ""
+
+workflows:
+  all:
+    - evaluate
+
+commands:
+  - name: clean
+    help: "Remove intermediate files"
+    script:
+      - "rm -rf intermediate/*"
+      - "rm -rf metrics/*"
+
+  - name: evaluate
+    help: "Run the SemEval-2018 DiscriminAtt evaluation"
