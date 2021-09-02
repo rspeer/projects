@@ -4,6 +4,7 @@ spacy_version: ">=3.1.0,<4.0.0"
 
 vars:
   config: "train"  # or "dev" or occasionally "test"
+  model: "intermediate/semdiff_thinc.bin"
 
 directories: ["assets", "intermediate", "metrics"]
 
@@ -17,6 +18,7 @@ assets:
 
 workflows:
   all:
+    - train
     - evaluate
 
 commands:
@@ -26,5 +28,21 @@ commands:
       - "rm -rf intermediate/*"
       - "rm -rf metrics/*"
 
+  - train:
+      help: "Train the semantic differences classifier"
+      script:
+        - "python scripts/train_semdiff.py ${vars.model}"
+      deps:
+        - "assets/DiscriminAtt"
+        - "scripts/semdiff_matt.py"
+      outputs:
+        - "${vars.model}"
   - name: evaluate
     help: "Run the SemEval-2018 DiscriminAtt evaluation"
+    script:
+      - "python scripts/evaluate_semdiff.py ${vars.model} metrics/accuracy.json"
+    deps:
+      - "scripts/evaluate_semdiff.py"
+      - "${vars.model}"
+    outputs:
+      - "metrics/accuracy.json"
