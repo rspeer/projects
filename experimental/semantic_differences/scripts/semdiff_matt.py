@@ -1,6 +1,7 @@
 from logging import disable
 from pathlib import Path
 import spacy
+import random
 import numpy as np
 from pathlib import Path
 from typing import List, Optional, Iterable, Tuple, Callable
@@ -9,13 +10,19 @@ from spacy.tokens import Doc
 from thinc.api import (
     Model,
     Adam,
+    SGD,
     CategoricalCrossentropy,
     chain,
     Softmax,
     concatenate,
     Maxout,
     Relu,
+    decaying,
+    Logistic,
+    Linear,
+    tuplify,
 )
+from thinc.layers.add import init as add_init
 from thinc.backends import get_array_ops
 from thinc.types import Floats2d, cast, Ints1d, Ints2d
 from tqdm import tqdm
@@ -44,7 +51,7 @@ def _dots_forward(
     model: Model[Tuple[Floats2d, Floats2d], Floats2d],
     X1_X2: Tuple[Floats2d, Floats2d],
     is_train: bool,
-) -> Tuple[Model, Callable]:
+):
     X1, X2 = X1_X2
     Y = (X1 * X2).sum(axis=1, keepdims=True)
 
@@ -52,6 +59,37 @@ def _dots_forward(
         return (X2 * dY, X1 * dY)
 
     return Y, backprop_dots
+
+
+def subtract(
+    model1: Model[Floats2d, Floats2d], model2: Model[Floats2d, Floats2d]
+) -> Model[Floats2d, Floats2d]:
+    # Really we should add a scaling parameter to the addition combinator..
+    return Model(
+        "subtract",
+        _subtract_forward,
+        layers=[model1, model2],
+        init=add_init,
+        dims={"nO": None},
+    )
+
+
+def _subtract_forward(
+    model: Model[Tuple[Floats2d, Floats2d], Floats2d],
+    X: Floats2d,
+    is_train: bool,
+) -> Tuple[Model, Callable]:
+    Y1, backprop_Y1 = model.layers[0](X, is_train=is_train)
+    Y2, backprop_Y2 = model.layers[1](X, is_train=is_train)
+
+    Z = Y1 - Y2
+
+    def _backprop_subtract(dZ: Floats2d) -> Floats2d:
+        dX = backprop_Y1(dZ)
+        dX += backprop_Y2(-dZ)
+        return dX
+
+    return Z, _backprop_subtract
 
 
 # Bah, fiddling with the typevars here isn't worth the effort.
@@ -73,6 +111,22 @@ def _getitems_forward(model, Xs, is_train: bool):
     return Y, backprop_getitems
 
 
+def getitem(index: int) -> Model[Tuple, Floats2d]:
+    return Model("getitem", _getitem_forward, attrs={"index": index})
+
+
+def _getitem_forward(model, Xs, is_train):
+    index = model.attrs["index"]
+    Y = Xs[index]
+
+    def _getitem_backward(dY: Floats2d) -> Tuple:
+        dX = [model.ops.alloc2f(*x.shape) for x in Xs]
+        dX[index] = dY
+        return tuple(dX)
+
+    return Y, _getitem_backward
+
+
 def dot_product_model() -> Model[Tuple[Floats2d, Floats2d, Floats2d], Floats2d]:
     """Create a feature vector consisting of three dot products:
     1. x1 * x2
@@ -81,16 +135,46 @@ def dot_product_model() -> Model[Tuple[Floats2d, Floats2d, Floats2d], Floats2d]:
 
     Then learn a two-class softmax layer over these inputs.
     """
-    with Model.define_operators({"|": concatenate, ">>": chain}):
+    with Model.define_operators({"|": concatenate, ">>": chain, "-": subtract}):
         return (
             (
                 (getitems(0, 1) >> dot_products())
                 | (getitems(0, 2) >> dot_products())
                 | (getitems(1, 2) >> dot_products())
             )
-            >> Maxout(128)
+            >> Maxout(32, nP=6, dropout=0.1)
             >> Softmax(nO=2)
         )
+
+
+def difference_model() -> Model[Tuple[Floats2d, Floats2d, Floats2d], Floats2d]:
+    """Create a feature vector consisting of three dot products:
+    1. x1 * x2
+    2. x1 * x3
+    3. x2 * x3
+
+    Then learn a two-class softmax layer over these inputs.
+    """
+    with Model.define_operators(
+        {
+            "|": concatenate,
+            ">>": chain,
+            "-": subtract,
+            "&": tuplify,
+        }
+    ):
+        return (
+            (getitems(0, 1) >> dot_products()) - (getitems(1, 2) >> dot_products())
+        ) >> Softmax(nO=2)
+
+
+def concatenation_model() -> Model[Tuple[Floats2d, Floats2d, Floats2d], Floats2d]:
+    """Concatenate word vectors, and pass them into a MLP.
+
+    Then learn a two-class softmax layer over these inputs.
+    """
+    with Model.define_operators({"|": concatenate, ">>": chain}):
+        return (getitem(0) | getitem(1) | getitem(2)) >> Maxout(16) >> Softmax(nO=2)
 
 
 @spacy.registry.readers("DiscriminAtt.en.v1")  # is this right?
@@ -130,9 +214,9 @@ def normalize_vec(vec):
 
 def get_word_vectors(nlp, texts: List[str]) -> Floats2d:
     # This way will be a bit faster, especially on GPU, but it's less obvious.
-    # rows = nlp.vocab.vectors.find(keys=texts)
-    # word_vecs = nlp.vocab.vectors.data[rows]
-    word_vecs = [normalize_vec(nlp.vocab[text].vector) for text in texts]
+    rows = nlp.vocab.vectors.find(keys=texts)
+    word_vecs = nlp.vocab.vectors.data[rows]
+    # word_vecs = [normalize_vec(nlp.vocab[text].vector) for text in texts]
     return cast(Floats2d, np.vstack(word_vecs))
 
 
@@ -168,40 +252,48 @@ def examples_to_arrays(
     return (vectors1, vectors2, att_vectors), outputs
 
 
-def train_model(model, optimizer, n_iter, batch_size):
-    train_X, train_Y = examples_to_arrays(
-        read_discriminatt_file(Path("assets/DiscriminAtt/training/train.txt"))
-    )
-    val_X, val_Y = examples_to_arrays(
-        read_discriminatt_file(Path("assets/DiscriminAtt/training/validation.txt"))
+def _read_resampled(path: Path, split=0.2):
+    examples = list(read_discriminatt_file(path / "train.txt"))
+    examples.extend(read_discriminatt_file(path / "validation.txt"))
+    random.shuffle(examples)
+    dev = examples[: int(len(examples) * split)]
+    train = examples[len(dev) :]
+    assert len(dev) < len(train)
+    assert len(dev) + len(train) == len(examples)
+    train_X, train_Y = examples_to_arrays(train)
+    val_X, val_Y = examples_to_arrays(dev)
+    return train_X, train_Y, val_X, val_Y
+
+
+def train_model(model: Model, optimizer, n_iter, batch_size):
+    train_X, train_Y, val_X, val_Y = _read_resampled(
+        Path("assets/DiscriminAtt/training")
     )
     model.initialize(X=train_X[:5], Y=train_Y[:5])
     loss_calc = CategoricalCrossentropy()
+    batches = model.ops.multibatch(batch_size, *train_X, train_Y, shuffle=True)
     for n in range(n_iter):
-        batches = model.ops.multibatch(batch_size, *train_X, train_Y, shuffle=True)
         loss = 0.0
         for X1, X2, X3, Y in tqdm(batches, leave=False):
-            X = (X1, X2, X3)
-            Yh, backprop = model.begin_update(X)
+            Yh, backprop = model.begin_update((X1, X2, X3))
             d_loss = loss_calc.get_grad(Yh, Y).astype("f")
             loss += loss_calc.get_loss(Yh, Y)
             backprop(d_loss)
             model.finish_update(optimizer)
-        score = evaluate(model, val_X, val_Y, batch_size)
-        print(f"{n}\t{loss:.5f}\t{score:.3f}")
+        train_score = evaluate(model, train_X, train_Y, batch_size)
+        dev_score = evaluate(model, val_X, val_Y, batch_size)
+        print(f"{n}\t{loss:.5f}\t{train_score:.3f}\t{dev_score:.3f}")
 
 
-def evaluate(model, val_X, val_Y, batch_size):
+def evaluate(model, X1_X2_X3, Y, batch_size):
     correct = 0
     total = 0
-    ops = get_array_ops(val_Y)
-    for X1, X2, X3, Y in model.ops.multibatch(batch_size, *val_X, val_Y):
-        X = (X1, X2, X3)
-        Yh = model.predict(X)
-        Y = ops.reshape2i(Y, Y.size, 1)
-        guesses = Yh.argmax(axis=1)
-        correct += (Yh.argmax(axis=1).flatten() == Y.flatten()).sum()
-        total += len(Yh)
+    ops = get_array_ops(Y)
+    for X1, X2, X3, y in model.ops.multibatch(batch_size, *X1_X2_X3, Y):
+        yh = model.predict((X1, X2, X3))
+        guesses = yh.argmax(axis=1)
+        correct += (guesses == y).sum()
+        total += len(yh)
     return correct / total
 
 
@@ -224,7 +316,13 @@ def evaluate_basic(val_X: Tuple[Floats2d, Floats2d, Floats2d], val_Y):
     return correct / total
 
 
-def main(n_iter: int = 50, batch_size: int = 32, learn_rate: float = 0.0001):
+def main(
+    out_path: Path,
+    *,
+    n_iter: int = 50,
+    batch_size: int = 32,
+    learn_rate: float = 0.0001,
+):
     # First, show the result that we can get by already knowing the best simple solution
     val_X, val_Y = examples_to_arrays(
         read_discriminatt_file(Path("assets/DiscriminAtt/training/validation.txt"))
@@ -232,9 +330,12 @@ def main(n_iter: int = 50, batch_size: int = 32, learn_rate: float = 0.0001):
     print(evaluate_basic(val_X, val_Y))
 
     # Now try to train a machine learning model
-    model = dot_product_model()
-    optimizer = Adam(learn_rate)
+    # model = difference_model()
+    model = concatenation_model()
+    optimizer = Adam(learn_rate=learn_rate, L2=0.0, grad_clip=0.0)
+    # optimizer = SGD(learn_rate=0.01, L2=0.0, grad_clip=0.0)
     train_model(model, optimizer, n_iter, batch_size)
+    model.to_disk(out_path)
 
 
 if __name__ == "__main__":
