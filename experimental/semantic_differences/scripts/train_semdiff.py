@@ -137,14 +137,10 @@ def dot_product_model() -> Model[Tuple[Floats2d, Floats2d, Floats2d], Floats2d]:
     """
     with Model.define_operators({"|": concatenate, ">>": chain, "-": subtract}):
         return (
-            (
-                (getitems(0, 1) >> dot_products())
-                | (getitems(0, 2) >> dot_products())
-                | (getitems(1, 2) >> dot_products())
-            )
-            >> Maxout(32, nP=6, dropout=0.1)
-            >> Softmax(nO=2)
-        )
+            (getitems(0, 1) >> dot_products())
+            | (getitems(0, 2) >> dot_products())
+            | (getitems(1, 2) >> dot_products())
+        ) >> Softmax(nO=2)
 
 
 def difference_model() -> Model[Tuple[Floats2d, Floats2d, Floats2d], Floats2d]:
@@ -265,10 +261,8 @@ def _read_resampled(path: Path, split=0.2):
     return train_X, train_Y, val_X, val_Y
 
 
-def train_model(model: Model, optimizer, n_iter, batch_size):
-    train_X, train_Y, val_X, val_Y = _read_resampled(
-        Path("assets/DiscriminAtt/training")
-    )
+def train_model(train_dir: Path, model: Model, optimizer, n_iter, batch_size):
+    train_X, train_Y, val_X, val_Y = _read_resampled(train_dir)
     model.initialize(X=train_X[:5], Y=train_Y[:5])
     loss_calc = CategoricalCrossentropy()
     batches = model.ops.multibatch(batch_size, *train_X, train_Y, shuffle=True)
@@ -317,24 +311,25 @@ def evaluate_basic(val_X: Tuple[Floats2d, Floats2d, Floats2d], val_Y):
 
 
 def main(
+    train_dir: Path,
     out_path: Path,
     *,
-    n_iter: int = 50,
+    n_iter: int = 40,
     batch_size: int = 32,
     learn_rate: float = 0.0001,
 ):
     # First, show the result that we can get by already knowing the best simple solution
     val_X, val_Y = examples_to_arrays(
-        read_discriminatt_file(Path("assets/DiscriminAtt/training/validation.txt"))
+        read_discriminatt_file(train_dir / "validation.txt")
     )
     print(evaluate_basic(val_X, val_Y))
 
     # Now try to train a machine learning model
     # model = difference_model()
-    model = concatenation_model()
+    model = dot_product_model()
     optimizer = Adam(learn_rate=learn_rate, L2=0.0, grad_clip=0.0)
     # optimizer = SGD(learn_rate=0.01, L2=0.0, grad_clip=0.0)
-    train_model(model, optimizer, n_iter, batch_size)
+    train_model(train_dir, model, optimizer, n_iter, batch_size)
     model.to_disk(out_path)
 
 
