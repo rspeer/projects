@@ -28,21 +28,24 @@ commands:
       - "rm -rf intermediate/*"
       - "rm -rf metrics/*"
 
-  - train:
-      help: "Train the semantic differences classifier"
-      script:
-        - "python scripts/train_semdiff.py ${vars.model}"
-      deps:
-        - "assets/DiscriminAtt"
-        - "scripts/semdiff_matt.py"
-      outputs:
-        - "${vars.model}"
+  - name: train
+    help: "Train the semantic differences classifier"
+    script:
+      - "python scripts/train_semdiff.py assets/DiscriminAtt/training ${vars.model}"
+    deps:
+      - "assets/DiscriminAtt/training"
+      - "scripts/train_semdiff.py"
+    outputs:
+      - "${vars.model}"
+
   - name: evaluate
     help: "Run the SemEval-2018 DiscriminAtt evaluation"
     script:
-      - "python scripts/evaluate_semdiff.py ${vars.model} metrics/accuracy.json"
+      - "python scripts/evaluate_semdiff.py assets/DiscriminAtt/test/ref/truth.txt ${vars.model} metrics/accuracy.json"
     deps:
+      - "scripts/train_semdiff.py"
       - "scripts/evaluate_semdiff.py"
       - "${vars.model}"
+      - "assets/DiscriminAtt/test"
     outputs:
       - "metrics/accuracy.json"
