@@ -27,6 +27,7 @@ workflows:
     - extract
     - convert
     - generate-config
+    - pretrain
     - train
     # - train-with-vectors
     - evaluate
@@ -65,6 +66,16 @@ commands:
       - "python -m spacy init config -l ${vars.spacy_lang} -p morphologizer,tagger,parser -o accuracy configs/${vars.ud_treebank}.cfg"
     outputs:
       - "configs/${vars.ud_treebank}.cfg"
+
+  - name: pretrain
+    help: "Pretrain on OSCAR"
+    script:
+      - "python -m spacy pretrain configs/${vars.ud_treebank}.cfg training/pretrain --gpu-id ${vars.gpu} --code functions.py"
+    deps:
+      - "corpus/oscar"
+      - "configs/${vars.ud_treebank}.cfg"
+    outputs:
+      - "training/pretrain"
 
   - name: train
     help: "Train without vectors"
