@@ -70,9 +70,8 @@ commands:
   - name: pretrain
     help: "Pretrain on OSCAR"
     script:
-      - "python -m spacy pretrain configs/${vars.ud_treebank}.cfg training/pretrain --gpu-id ${vars.gpu} --code functions.py"
+      - "python -m spacy pretrain configs/${vars.ud_treebank}.cfg training/pretrain --gpu-id ${vars.gpu} --components.tok2vec.model.embed.include_static_vectors=false --code functions.py"
     deps:
-      - "corpus/oscar"
       - "configs/${vars.ud_treebank}.cfg"
     outputs:
       - "training/pretrain"

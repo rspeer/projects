@@ -7,6 +7,8 @@ from spacy.tokens import Doc
 from spacy.training.example import Example
 from typing import Optional, Iterable, Iterator, Callable
 
+from spacious_corpus.corpus import corpus_reader
+
 
 # I copied this dict from
 # https://github.com/huggingface/datasets/blob/master/datasets/oscar/oscar.py.
