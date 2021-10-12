@@ -3,3 +3,4 @@ metrics
 corpus
 training
 packages
+wandb

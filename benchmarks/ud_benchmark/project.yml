@@ -8,7 +8,8 @@ vars:
   spacy_lang: "en"
   # spacy model with vectors by name or path: "en_core_web_lg"
   # if used, switch from train to train-with-vectors
-  vectors: null
+  vectors: "en_core_web_lg"
+  init_tok2vec: "training/pretrain"
   gpu: 0
   package_name: "ud_en_ewt"
   package_version: "0.0.0"
@@ -28,8 +29,8 @@ workflows:
     - convert
     - generate-config
     - pretrain
-    - train
-    # - train-with-vectors
+    # - train
+    - train-with-vectors
     - evaluate
     - package
 
@@ -70,7 +71,7 @@ commands:
   - name: pretrain
     help: "Pretrain on OSCAR"
     script:
-      - "python -m spacy pretrain configs/${vars.ud_treebank}.cfg training/pretrain --gpu-id ${vars.gpu} --components.tok2vec.model.embed.include_static_vectors=false --code functions.py"
+      - "python -m spacy pretrain configs/${vars.ud_treebank}.cfg training/${vars.ud_treebank} --gpu-id ${vars.gpu} --components.tok2vec.model.embed.include_static_vectors=true --code functions.py"
     deps:
       - "configs/${vars.ud_treebank}.cfg"
     outputs:
@@ -79,7 +80,7 @@ commands:
   - name: train
     help: "Train without vectors"
     script:
-      - "python -m spacy train configs/${vars.ud_treebank}.cfg -o training/${vars.ud_treebank} --gpu-id ${vars.gpu} --paths.train corpus/${vars.ud_treebank}/train.spacy --paths.dev corpus/${vars.ud_treebank}/dev.spacy --training.max_steps=0 --initialize.vectors=null --components.tok2vec.model.embed.include_static_vectors=false"
+      - "python -m spacy train configs/${vars.ud_treebank}.cfg -o training/${vars.ud_treebank} --gpu-id ${vars.gpu} --paths.train corpus/${vars.ud_treebank}/train.spacy --paths.dev corpus/${vars.ud_treebank}/dev.spacy --training.max_steps=0 --initialize.vectors=null --components.tok2vec.model.embed.include_static_vectors=false --initialize.init_tok2vec=training/pretrain/model0.bin --code functions.py"
     deps:
       - "corpus/${vars.ud_treebank}/train.spacy"
       - "corpus/${vars.ud_treebank}/dev.spacy"
@@ -90,7 +91,7 @@ commands:
   - name: train-with-vectors
     help: "Train with vectors"
     script:
-      - "python -m spacy train configs/${vars.ud_treebank}.cfg -o training2/${vars.ud_treebank} --gpu-id ${vars.gpu} --paths.train corpus/${vars.ud_treebank}/train.spacy --paths.dev corpus/${vars.ud_treebank}/dev.spacy --training.max_steps=0 --initialize.vectors=${vars.vectors}"
+      - "python -m spacy train configs/${vars.ud_treebank}.cfg -o training/${vars.ud_treebank} --gpu-id ${vars.gpu} --paths.train corpus/${vars.ud_treebank}/train.spacy --paths.dev corpus/${vars.ud_treebank}/dev.spacy --training.max_steps=0 --initialize.vectors=${vars.vectors} --code functions.py"
     deps:
       - "corpus/${vars.ud_treebank}/train.spacy"
       - "corpus/${vars.ud_treebank}/dev.spacy"
